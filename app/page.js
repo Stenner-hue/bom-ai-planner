@@ -8,25 +8,69 @@ export default function Home() {
     {
       role: "ai",
       content:
-        "👋 Upload Costing PDF and Shortage Excel. I can calculate shortages, lead times, cost, and order priority."
+        "👋 Upload Costing Excel and Shortage Excel. I can calculate cost, shortages, lead times, and order priority."
     }
   ]);
 
   const [input, setInput] = useState("");
-  const [shortageData, setShortageData] = useState([]);
 
-  // 🔑 IMPORTANT STATE
-  const [pdfUploaded, setPdfUploaded] = useState(false);
+  const [shortageData, setShortageData] = useState([]);
+  const [costingLoaded, setCostingLoaded] = useState(false);
   const [totalCost, setTotalCost] = useState(null);
+  const [costLines, setCostLines] = useState(0);
 
   /* ==============================
-     EXCEL UPLOAD
+     COSTING EXCEL UPLOAD
      ============================== */
-  function handleExcelUpload(e) {
+  function handleCostingExcelUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
+
+    reader.onload = (evt) => {
+      const workbook = XLSX.read(evt.target.result, { type: "binary" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+      let sum = 0;
+      let lines = 0;
+
+      rows.forEach((r) => {
+        const desc = String(r.Description || "").toLowerCase();
+        const lineTotal = Number(r["Line Total"] || r["Line total"] || 0);
+
+        // Ignore dummy / non-order lines
+        if (desc.includes("dummy")) return;
+        if (lineTotal <= 0) return;
+
+        sum += lineTotal;
+        lines++;
+      });
+
+      setTotalCost(sum.toFixed(2));
+      setCostLines(lines);
+      setCostingLoaded(true);
+
+      addAI(
+        `💰 Costing file loaded.\nTotal cost £${sum.toFixed(
+          2
+        )}\nCosted lines: ${lines}`
+      );
+    };
+
+    reader.readAsBinaryString(file);
+  }
+
+  /* ==============================
+     SHORTAGE EXCEL UPLOAD
+     ============================== */
+  function handleShortageExcelUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
     reader.onload = (evt) => {
       const workbook = XLSX.read(evt.target.result, { type: "binary" });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -56,6 +100,7 @@ export default function Home() {
       });
 
       setShortageData(cleaned);
+
       addAI(`✅ Shortage file loaded (${cleaned.length} rows).`);
     };
 
@@ -63,48 +108,27 @@ export default function Home() {
   }
 
   /* ==============================
-     PDF UPLOAD — FIXED
-     ============================== */
-  async function handlePdfUpload(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setPdfUploaded(true); // 🔑 mark as uploaded
-
-    try {
-      const res = await fetch("/api/parse-costing", {
-        method: "POST",
-        body: file
-      });
-
-      const data = await res.json();
-
-      if (data.totalCost) {
-        setTotalCost(Number(data.totalCost));
-        addAI(`💰 Costing PDF analysed. Total cost £${data.totalCost}`);
-      } else {
-        setTotalCost(null);
-        addAI(
-          "⚠️ Costing PDF uploaded, but no line totals were detected. Please check PDF format."
-        );
-      }
-    } catch (err) {
-      setTotalCost(null);
-      addAI("❌ Failed to analyse costing PDF.");
-    }
-  }
-
-  /* ==============================
      CHAT
      ============================== */
   function handleAsk() {
     if (!input.trim()) return;
-
     const q = input.toLowerCase();
+
     setMessages((prev) => [...prev, { role: "user", content: input }]);
 
+    // COST
+    if (q.includes("cost")) {
+      if (!costingLoaded) {
+        addAI("⚠️ Upload costing Excel first.");
+      } else {
+        addAI(
+          `💰 Total estimated cost: £${totalCost}\nCosted lines: ${costLines}`
+        );
+      }
+    }
+
     // SHORTAGES
-    if (q.includes("shortage")) {
+    else if (q.includes("shortage")) {
       const shortages = shortageData.filter((p) => p.shortage > 0);
       if (!shortages.length) {
         addAI("✅ No shortages detected.");
@@ -118,19 +142,6 @@ export default function Home() {
               )
               .join("\n")
         );
-      }
-    }
-
-    // COST — FIXED LOGIC
-    else if (q.includes("cost")) {
-      if (!pdfUploaded) {
-        addAI("⚠️ Upload costing PDF first.");
-      } else if (totalCost === null) {
-        addAI(
-          "⚠️ Costing PDF uploaded, but cost could not be calculated."
-        );
-      } else {
-        addAI(`💰 Total estimated cost: £${totalCost}`);
       }
     }
 
@@ -156,7 +167,9 @@ export default function Home() {
     }
 
     else {
-      addAI("🤖 Ask about cost, shortages, or what to order first.");
+      addAI(
+        "🤖 Ask about cost, shortages, or what to order first."
+      );
     }
 
     setInput("");
@@ -175,8 +188,12 @@ export default function Home() {
         <h2 className="text-xl font-semibold">BOM AI</h2>
 
         <div className="bg-gray-800 p-4 rounded-lg">
-          <p className="text-sm font-medium">Costing PDF</p>
-          <input type="file" accept=".pdf" onChange={handlePdfUpload} />
+          <p className="text-sm font-medium">Costing Excel</p>
+          <input
+            type="file"
+            accept=".xlsx,.xls,.xlsm,.xlsb,.csv"
+            onChange={handleCostingExcelUpload}
+          />
         </div>
 
         <div className="bg-gray-800 p-4 rounded-lg">
@@ -184,7 +201,7 @@ export default function Home() {
           <input
             type="file"
             accept=".xlsx,.xls,.xlsm,.xlsb,.csv"
-            onChange={handleExcelUpload}
+            onChange={handleShortageExcelUpload}
           />
         </div>
       </aside>
@@ -224,7 +241,7 @@ export default function Home() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAsk()}
               className="flex-1 bg-gray-800 rounded-xl px-4 py-3"
-              placeholder="Ask: shortages / cost / what to order first"
+              placeholder="Ask: cost / shortages / what to order first"
             />
             <button
               onClick={handleAsk}
