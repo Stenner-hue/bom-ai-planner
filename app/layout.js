@@ -1,3 +1,5 @@
+import "./globals.css";
+
 export const metadata = {
   title: "BOM AI Planner",
   description: "AI-assisted BOM costing and planning tool"
@@ -6,7 +8,7 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="min-h-screen">{children}</body>
     </html>
   );
 }
