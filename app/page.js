@@ -14,33 +14,31 @@ export default function Home() {
 
   const [input, setInput] = useState("");
   const [shortageData, setShortageData] = useState([]);
+
+  // 🔑 IMPORTANT STATE
+  const [pdfUploaded, setPdfUploaded] = useState(false);
   const [totalCost, setTotalCost] = useState(null);
 
   /* ==============================
-     EXCEL UPLOAD — FIX 1 IS HERE
+     EXCEL UPLOAD
      ============================== */
   function handleExcelUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
-
     reader.onload = (evt) => {
       const workbook = XLSX.read(evt.target.result, { type: "binary" });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const raw = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
-      // 🔴 FIX 1: CALCULATE SHORTAGE PROPERLY
       const cleaned = raw.map((r) => {
         const required = Number(
           r["Qty Required"] || r.Required || r.Qty || 0
         );
-
         const freeStock = Number(
           r["Free Stock"] || r.Stock || 0
         );
-
-        const shortage = Math.max(required - freeStock, 0);
 
         return {
           description:
@@ -48,11 +46,9 @@ export default function Home() {
             r.Part ||
             r["Stock Code"] ||
             "Unknown part",
-
           required,
           freeStock,
-          shortage,
-
+          shortage: Math.max(required - freeStock, 0),
           leadTime: Number(
             r["Lead Time"] || r["Lead Time (Days)"] || 0
           )
@@ -60,91 +56,91 @@ export default function Home() {
       });
 
       setShortageData(cleaned);
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          content: `✅ Shortage file loaded (${cleaned.length} rows).`
-        }
-      ]);
+      addAI(`✅ Shortage file loaded (${cleaned.length} rows).`);
     };
 
     reader.readAsBinaryString(file);
   }
 
   /* ==============================
-     PDF UPLOAD (UNCHANGED)
+     PDF UPLOAD — FIXED
      ============================== */
   async function handlePdfUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
 
-    const res = await fetch("/api/parse-costing", {
-      method: "POST",
-      body: file
-    });
+    setPdfUploaded(true); // 🔑 mark as uploaded
 
-    const data = await res.json();
-    setTotalCost(data.totalCost);
+    try {
+      const res = await fetch("/api/parse-costing", {
+        method: "POST",
+        body: file
+      });
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "ai",
-        content: `💰 Costing PDF analysed. Total cost £${data.totalCost}`
+      const data = await res.json();
+
+      if (data.totalCost) {
+        setTotalCost(Number(data.totalCost));
+        addAI(`💰 Costing PDF analysed. Total cost £${data.totalCost}`);
+      } else {
+        setTotalCost(null);
+        addAI(
+          "⚠️ Costing PDF uploaded, but no line totals were detected. Please check PDF format."
+        );
       }
-    ]);
+    } catch (err) {
+      setTotalCost(null);
+      addAI("❌ Failed to analyse costing PDF.");
+    }
   }
 
   /* ==============================
-     CHAT LOGIC
+     CHAT
      ============================== */
   function handleAsk() {
     if (!input.trim()) return;
 
-    const question = input.toLowerCase();
+    const q = input.toLowerCase();
+    setMessages((prev) => [...prev, { role: "user", content: input }]);
 
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", content: input }
-    ]);
-
-    // A) SHOW EXACT SHORTAGES
-    if (question.includes("shortage")) {
+    // SHORTAGES
+    if (q.includes("shortage")) {
       const shortages = shortageData.filter((p) => p.shortage > 0);
-
-      if (shortages.length === 0) {
-        addAI("✅ No shortages detected. All required parts are in stock.");
+      if (!shortages.length) {
+        addAI("✅ No shortages detected.");
       } else {
         addAI(
           "📦 Shortages:\n" +
             shortages
               .map(
                 (p) =>
-                  `- ${p.description} | Required ${p.required} | Free ${p.freeStock} | Short ${p.shortage} | Lead ${p.leadTime} days`
+                  `- ${p.description} | Short ${p.shortage} | Lead ${p.leadTime} days`
               )
               .join("\n")
         );
       }
     }
 
-    // COST
-    else if (question.includes("cost")) {
-      addAI(
-        totalCost
-          ? `💰 Total estimated cost: £${totalCost}`
-          : "⚠️ Upload costing PDF first."
-      );
+    // COST — FIXED LOGIC
+    else if (q.includes("cost")) {
+      if (!pdfUploaded) {
+        addAI("⚠️ Upload costing PDF first.");
+      } else if (totalCost === null) {
+        addAI(
+          "⚠️ Costing PDF uploaded, but cost could not be calculated."
+        );
+      } else {
+        addAI(`💰 Total estimated cost: £${totalCost}`);
+      }
     }
 
-    // WHAT TO ORDER FIRST
-    else if (question.includes("order")) {
+    // ORDER PRIORITY
+    else if (q.includes("order")) {
       const priority = shortageData
         .filter((p) => p.shortage > 0)
         .sort((a, b) => b.leadTime - a.leadTime);
 
-      if (priority.length === 0) {
+      if (!priority.length) {
         addAI("✅ No urgent orders required.");
       } else {
         addAI(
@@ -160,9 +156,7 @@ export default function Home() {
     }
 
     else {
-      addAI(
-        "🤖 Ask about shortages, cost, or what to order first."
-      );
+      addAI("🤖 Ask about cost, shortages, or what to order first.");
     }
 
     setInput("");
