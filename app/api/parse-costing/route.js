@@ -2,62 +2,61 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * CIM50 Costing PDF Parser
- * - Sums ONLY "Line Total" column
- * - Ignores Qty and Cost Price
- * - Safe for large BOM PDFs
+ * CIM50 Costing PDF Parser (ROBUST)
+ * Strategy:
+ * - Extract ALL decimal numbers after header
+ * - Group as Qty | Cost | Line Total
+ * - Sum ONLY Line Totals
  */
 export async function POST(req) {
   try {
-    // Dynamic import avoids build-time execution
     const pdfParse = (await import("pdf-parse")).default;
 
     const arrayBuffer = await req.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
     const parsed = await pdfParse(buffer);
-    const lines = parsed.text.split("\n");
+    const text = parsed.text;
 
-    let totalCost = 0;
-    let countedLines = 0;
-
-    for (const line of lines) {
-      /**
-       * We look for 3 decimal numbers at end of line:
-       * Qty  CostPrice  LineTotal
-       * We capture ONLY the LAST one (Line Total)
-       */
-      const match = line.match(
-        /(\d+\.\d{2})\s*$/
-      );
-
-      if (match) {
-        const value = Number(match[1]);
-        if (!isNaN(value)) {
-          totalCost += value;
-          countedLines++;
-        }
-      }
-    }
-
-    // Safety: ensure something was actually summed
-    if (countedLines === 0) {
+    // Split text AFTER header
+    const headerIndex = text.indexOf("Line Total");
+    if (headerIndex === -1) {
       return Response.json(
-        {
-          error:
-            "No line totals detected. PDF format may differ from CIM50 standard."
-        },
+        { error: "Costing table header not found." },
         { status: 400 }
       );
     }
 
+    const tableText = text.slice(headerIndex);
+
+    // Extract ALL decimal numbers (e.g. 155.82, 1.00, 311.64)
+    const numbers = tableText.match(/\d+\.\d{2}/g);
+
+    if (!numbers || numbers.length < 3) {
+      return Response.json(
+        { error: "No costing values detected." },
+        { status: 400 }
+      );
+    }
+
+    let totalCost = 0;
+    let linesCounted = 0;
+
+    // Every 3rd number is Line Total: [Qty, Cost, LineTotal]
+    for (let i = 2; i < numbers.length; i += 3) {
+      const value = Number(numbers[i]);
+      if (!isNaN(value)) {
+        totalCost += value;
+        linesCounted++;
+      }
+    }
+
     return Response.json({
       totalCost: totalCost.toFixed(2),
-      linesCounted: countedLines
+      linesCounted
     });
   } catch (error) {
     console.error("CIM50 PDF parse error:", error);
-
     return Response.json(
       { error: "Failed to parse CIM50 costing PDF" },
       { status: 500 }
