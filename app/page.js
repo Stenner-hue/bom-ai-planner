@@ -8,7 +8,7 @@ export default function Home() {
     {
       role: "ai",
       content:
-        "👋 Upload Costing PDF and Shortage Excel. I can calculate cost, shortages, kit readiness, and order priority."
+        "👋 Upload Costing PDF and Shortage Excel. I can calculate shortages, lead times, cost, and order priority."
     }
   ]);
 
@@ -16,31 +16,66 @@ export default function Home() {
   const [shortageData, setShortageData] = useState([]);
   const [totalCost, setTotalCost] = useState(null);
 
-  /* ---------- EXCEL ---------- */
+  /* ==============================
+     EXCEL UPLOAD — FIX 1 IS HERE
+     ============================== */
   function handleExcelUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
+
     reader.onload = (evt) => {
-      const wb = XLSX.read(evt.target.result, { type: "binary" });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const workbook = XLSX.read(evt.target.result, { type: "binary" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const raw = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
-      const cleaned = raw.map((r) => ({
-        description: r.Description || r.Part || "Unknown",
-        shortage: Number(r.Shortage || r["Shortage Qty"] || 0),
-        leadTime: Number(r["Lead Time"] || r["Lead Time (Days)"] || 0)
-      }));
+      // 🔴 FIX 1: CALCULATE SHORTAGE PROPERLY
+      const cleaned = raw.map((r) => {
+        const required = Number(
+          r["Qty Required"] || r.Required || r.Qty || 0
+        );
+
+        const freeStock = Number(
+          r["Free Stock"] || r.Stock || 0
+        );
+
+        const shortage = Math.max(required - freeStock, 0);
+
+        return {
+          description:
+            r.Description ||
+            r.Part ||
+            r["Stock Code"] ||
+            "Unknown part",
+
+          required,
+          freeStock,
+          shortage,
+
+          leadTime: Number(
+            r["Lead Time"] || r["Lead Time (Days)"] || 0
+          )
+        };
+      });
 
       setShortageData(cleaned);
-      addAI(`✅ Shortage file loaded (${cleaned.length} rows).`);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          content: `✅ Shortage file loaded (${cleaned.length} rows).`
+        }
+      ]);
     };
 
     reader.readAsBinaryString(file);
   }
 
-  /* ---------- PDF ---------- */
+  /* ==============================
+     PDF UPLOAD (UNCHANGED)
+     ============================== */
   async function handlePdfUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -53,40 +88,49 @@ export default function Home() {
     const data = await res.json();
     setTotalCost(data.totalCost);
 
-    addAI(`💰 Costing PDF analysed. Total cost £${data.totalCost}`);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "ai",
+        content: `💰 Costing PDF analysed. Total cost £${data.totalCost}`
+      }
+    ]);
   }
 
-  /* ---------- CHAT ---------- */
-  function addAI(text) {
-    setMessages((m) => [...m, { role: "ai", content: text }]);
-  }
-
+  /* ==============================
+     CHAT LOGIC
+     ============================== */
   function handleAsk() {
     if (!input.trim()) return;
 
-    const q = input.toLowerCase();
-    setMessages((m) => [...m, { role: "user", content: input }]);
+    const question = input.toLowerCase();
 
-    /* A — Exact shortages */
-    if (q.includes("shortage")) {
-      const s = shortageData.filter((p) => p.shortage > 0);
-      if (!s.length) {
-        addAI("✅ No shortages detected.");
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: input }
+    ]);
+
+    // A) SHOW EXACT SHORTAGES
+    if (question.includes("shortage")) {
+      const shortages = shortageData.filter((p) => p.shortage > 0);
+
+      if (shortages.length === 0) {
+        addAI("✅ No shortages detected. All required parts are in stock.");
       } else {
         addAI(
           "📦 Shortages:\n" +
-            s
+            shortages
               .map(
                 (p) =>
-                  `- ${p.description} – Qty ${p.shortage} – ${p.leadTime} days`
+                  `- ${p.description} | Required ${p.required} | Free ${p.freeStock} | Short ${p.shortage} | Lead ${p.leadTime} days`
               )
               .join("\n")
         );
       }
     }
 
-    /* B — Total cost */
-    else if (q.includes("cost")) {
+    // COST
+    else if (question.includes("cost")) {
       addAI(
         totalCost
           ? `💰 Total estimated cost: £${totalCost}`
@@ -94,22 +138,21 @@ export default function Home() {
       );
     }
 
-    /* C — What to order first */
-    else if (q.includes("order")) {
+    // WHAT TO ORDER FIRST
+    else if (question.includes("order")) {
       const priority = shortageData
         .filter((p) => p.shortage > 0)
         .sort((a, b) => b.leadTime - a.leadTime);
 
-      if (!priority.length) {
-        addAI("✅ Nothing urgent to order.");
+      if (priority.length === 0) {
+        addAI("✅ No urgent orders required.");
       } else {
         addAI(
           "🚨 Order priority:\n" +
             priority
-              .slice(0, 5)
               .map(
                 (p, i) =>
-                  `${i + 1}. ${p.description} – ${p.leadTime} days – Qty ${p.shortage}`
+                  `${i + 1}. ${p.description} | Short ${p.shortage} | Lead ${p.leadTime} days`
               )
               .join("\n")
         );
@@ -118,14 +161,20 @@ export default function Home() {
 
     else {
       addAI(
-        "🤖 Ask me about cost, shortages, kit date, or what to order first."
+        "🤖 Ask about shortages, cost, or what to order first."
       );
     }
 
     setInput("");
   }
 
-  /* ---------- UI ---------- */
+  function addAI(text) {
+    setMessages((prev) => [...prev, { role: "ai", content: text }]);
+  }
+
+  /* ==============================
+     UI
+     ============================== */
   return (
     <div className="flex h-screen">
       <aside className="w-72 bg-gray-900 p-6 space-y-6 border-r border-gray-800">
