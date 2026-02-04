@@ -8,12 +8,15 @@ export default function Home() {
     {
       role: "ai",
       content:
-        "👋 Upload your shortage Excel file. I can analyse shortages, stock, and lead times."
+        "👋 Upload your Costing PDF and Shortage Excel. I’ll analyse cost, shortages, lead times, and kit-date risk."
     }
   ]);
 
   const [input, setInput] = useState("");
   const [shortageData, setShortageData] = useState([]);
+  const [pdfLoaded, setPdfLoaded] = useState(false);
+
+  /* ---------- FILE UPLOAD HANDLERS ---------- */
 
   function handleExcelUpload(e) {
     const file = e.target.files[0];
@@ -22,24 +25,63 @@ export default function Home() {
     const reader = new FileReader();
 
     reader.onload = (evt) => {
-      const data = evt.target.result;
-      const workbook = XLSX.read(data, { type: "binary" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(sheet);
+      try {
+        const workbook = XLSX.read(evt.target.result, { type: "binary" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
-      setShortageData(json);
+        // Normalise data
+        const cleaned = raw.map((row) => ({
+          description:
+            row.Description ||
+            row.DESCRIPTION ||
+            row.Part ||
+            "Unknown",
+          required: Number(row.Required || row.Qty || row["Qty Required"] || 0),
+          freeStock: Number(row["Free Stock"] || row.Stock || 0),
+          shortage: Number(row.Shortage || row["Shortage Qty"] || 0),
+          leadTime: Number(row["Lead Time"] || row["Lead Time (Days)"] || 0)
+        }));
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          content: `✅ Shortage file loaded (${json.length} rows). Ready for questions.`
-        }
-      ]);
+        setShortageData(cleaned);
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            content: `✅ Shortage file loaded (${cleaned.length} rows).`
+          }
+        ]);
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            content:
+              "❌ I couldn’t read that Excel file. Please check the format."
+          }
+        ]);
+      }
     };
 
     reader.readAsBinaryString(file);
   }
+
+  function handlePdfUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setPdfLoaded(true);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "ai",
+        content: `📄 Costing PDF loaded (${file.name}).`
+      }
+    ]);
+  }
+
+  /* ---------- CHAT LOGIC ---------- */
 
   function handleAsk() {
     if (!input.trim()) return;
@@ -47,67 +89,87 @@ export default function Home() {
     const userMessage = { role: "user", content: input };
     const aiMessage = {
       role: "ai",
-      content: answerFromShortageData(input)
+      content: answerQuestion(input)
     };
 
     setMessages([...messages, userMessage, aiMessage]);
     setInput("");
   }
 
-  function answerFromShortageData(question) {
-    if (shortageData.length === 0) {
-      return "⚠️ Please upload a shortage Excel file first.";
-    }
-
+  function answerQuestion(question) {
     const q = question.toLowerCase();
 
-    if (q.includes("shortage")) {
-      const shortages = shortageData.filter(
-        (row) => Number(row.Shortage) > 0
-      );
+    if (q.includes("cost")) {
+      if (!pdfLoaded) {
+        return "⚠️ Please upload a costing PDF first.";
+      }
+      return "💰 I’ll calculate total and assembly-level costs from the costing PDF.";
+    }
 
-      if (shortages.length === 0) {
-        return "✅ No shortages found. All required parts are in stock.";
+    if (q.includes("shortage")) {
+      if (shortageData.length === 0) {
+        return "⚠️ Please upload a shortage Excel file first.";
       }
 
-      return `📦 ${shortages.length} items are in shortage. The most critical ones should be ordered first.`;
+      const shortages = shortageData.filter((p) => p.shortage > 0);
+
+      if (shortages.length === 0) {
+        return "✅ No shortages detected. All required parts are available.";
+      }
+
+      return `📦 ${shortages.length} items are in shortage. These drive procurement and build risk.`;
     }
 
     if (q.includes("lead")) {
-      const withLeadTime = shortageData.filter(
-        (row) => Number(row["Lead Time"]) > 0
-      );
-
-      if (withLeadTime.length === 0) {
-        return "⚠️ No lead times defined in the shortage file.";
+      if (shortageData.length === 0) {
+        return "⚠️ No shortage data loaded.";
       }
 
-      const longest = withLeadTime.reduce((a, b) =>
-        Number(a["Lead Time"]) > Number(b["Lead Time"]) ? a : b
+      const valid = shortageData.filter((p) => p.leadTime > 0);
+      if (valid.length === 0) {
+        return "⚠️ No lead times defined in the data.";
+      }
+
+      const longest = valid.reduce((a, b) =>
+        a.leadTime > b.leadTime ? a : b
       );
 
-      return `⏱️ Longest lead-time item: ${longest.Description} (${longest["Lead Time"]} days).`;
+      return `⏱️ Longest lead-time item: ${longest.description} (${longest.leadTime} days).`;
     }
 
-    return "🤖 I can answer questions about shortages and lead times from the uploaded Excel.";
+    if (q.includes("kit")) {
+      return "📅 I’ll compare the kit date against the longest lead-time item to assess build risk.";
+    }
+
+    return "🤖 I can answer questions about cost, shortages, lead times, and kit dates.";
   }
+
+  /* ---------- UI ---------- */
 
   return (
     <div className="flex h-screen">
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-900 border-r border-gray-800 p-6">
-        <h2 className="text-xl font-semibold mb-6">BOM AI</h2>
+      <aside className="w-72 bg-gray-900 border-r border-gray-800 p-6 space-y-6">
+        <h2 className="text-xl font-semibold">BOM AI</h2>
 
-        <div className="space-y-4">
-          <div className="p-4 bg-gray-800 rounded-lg">
-            <p className="text-sm font-medium">Shortage Excel</p>
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              className="mt-2 text-sm"
-              onChange={handleExcelUpload}
-            />
-          </div>
+        <div className="bg-gray-800 p-4 rounded-lg">
+          <p className="text-sm font-medium">Costing PDF</p>
+          <input
+            type="file"
+            accept=".pdf"
+            onChange={handlePdfUpload}
+            className="mt-2 text-sm"
+          />
+        </div>
+
+        <div className="bg-gray-800 p-4 rounded-lg">
+          <p className="text-sm font-medium">Shortage Excel</p>
+          <input
+            type="file"
+            accept=".xlsx,.xls,.xlsm,.xlsb,.csv"
+            onChange={handleExcelUpload}
+            className="mt-2 text-sm"
+          />
         </div>
       </aside>
 
@@ -118,14 +180,14 @@ export default function Home() {
             AI Production & Planning Assistant
           </h1>
           <p className="text-gray-400 text-sm">
-            Shortages · Lead times · Build risk
+            Cost · Shortages · Lead times · Kit readiness
           </p>
         </header>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {messages.map((msg, idx) => (
+          {messages.map((msg, i) => (
             <div
-              key={idx}
+              key={i}
               className={`flex ${
                 msg.role === "user" ? "justify-end" : "justify-start"
               }`}
@@ -149,8 +211,7 @@ export default function Home() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAsk()}
-              type="text"
-              placeholder="Ask about shortages or lead times..."
+              placeholder="Ask about cost, shortages, lead time, kit date..."
               className="flex-1 bg-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none"
             />
             <button
