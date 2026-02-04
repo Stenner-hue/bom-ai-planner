@@ -8,7 +8,7 @@ export default function Home() {
     {
       role: "ai",
       content:
-        "👋 Upload Costing Excel and Shortage Excel. I can calculate cost, shortages, lead times, and order priority."
+        "👋 Upload Costing Excel and Shortage Excel. I calculate cost, shortages, lead times, and order priority."
     }
   ]);
 
@@ -20,7 +20,7 @@ export default function Home() {
   const [costLines, setCostLines] = useState(0);
 
   /* ==============================
-     COSTING EXCEL UPLOAD
+     COSTING EXCEL (FIXED)
      ============================== */
   function handleCostingExcelUpload(e) {
     const file = e.target.files[0];
@@ -29,18 +29,20 @@ export default function Home() {
     const reader = new FileReader();
 
     reader.onload = (evt) => {
-      const workbook = XLSX.read(evt.target.result, { type: "binary" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const wb = XLSX.read(evt.target.result, { type: "binary" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
       let sum = 0;
       let lines = 0;
 
       rows.forEach((r) => {
+        const reference = String(r.Reference || "").trim();
         const desc = String(r.Description || "").toLowerCase();
-        const lineTotal = Number(r["Line Total"] || r["Line total"] || 0);
+        const lineTotal = Number(r["Line Total"] || 0);
 
-        // Ignore dummy / non-order lines
+        // 🔴 CRITICAL RULES
+        if (reference.startsWith("Z")) return; // sub-assembly
         if (desc.includes("dummy")) return;
         if (lineTotal <= 0) return;
 
@@ -55,7 +57,7 @@ export default function Home() {
       addAI(
         `💰 Costing file loaded.\nTotal cost £${sum.toFixed(
           2
-        )}\nCosted lines: ${lines}`
+        )}\nCosted component lines: ${lines}`
       );
     };
 
@@ -63,7 +65,7 @@ export default function Home() {
   }
 
   /* ==============================
-     SHORTAGE EXCEL UPLOAD
+     SHORTAGE EXCEL (EXPLAINED)
      ============================== */
   function handleShortageExcelUpload(e) {
     const file = e.target.files[0];
@@ -72,13 +74,13 @@ export default function Home() {
     const reader = new FileReader();
 
     reader.onload = (evt) => {
-      const workbook = XLSX.read(evt.target.result, { type: "binary" });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const wb = XLSX.read(evt.target.result, { type: "binary" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
       const raw = XLSX.utils.sheet_to_json(sheet, { defval: "" });
 
       const cleaned = raw.map((r) => {
         const required = Number(
-          r["Qty Required"] || r.Required || r.Qty || 0
+          r["Qty Required"] || r.Required || 0
         );
         const freeStock = Number(
           r["Free Stock"] || r.Stock || 0
@@ -89,7 +91,7 @@ export default function Home() {
             r.Description ||
             r.Part ||
             r["Stock Code"] ||
-            "Unknown part",
+            "Unknown",
           required,
           freeStock,
           shortage: Math.max(required - freeStock, 0),
@@ -101,7 +103,9 @@ export default function Home() {
 
       setShortageData(cleaned);
 
-      addAI(`✅ Shortage file loaded (${cleaned.length} rows).`);
+      addAI(
+        `✅ Shortage file loaded.\nRows analysed: ${cleaned.length}`
+      );
     };
 
     reader.readAsBinaryString(file);
@@ -122,7 +126,7 @@ export default function Home() {
         addAI("⚠️ Upload costing Excel first.");
       } else {
         addAI(
-          `💰 Total estimated cost: £${totalCost}\nCosted lines: ${costLines}`
+          `💰 Total estimated cost: £${totalCost}\nComponent lines costed: ${costLines}`
         );
       }
     }
@@ -130,11 +134,14 @@ export default function Home() {
     // SHORTAGES
     else if (q.includes("shortage")) {
       const shortages = shortageData.filter((p) => p.shortage > 0);
-      if (!shortages.length) {
-        addAI("✅ No shortages detected.");
+
+      if (shortages.length === 0) {
+        addAI(
+          "✅ No material shortages for this BOM.\nAll required components are available or covered by stock."
+        );
       } else {
         addAI(
-          "📦 Shortages:\n" +
+          "📦 Material shortages:\n" +
             shortages
               .map(
                 (p) =>
@@ -151,11 +158,11 @@ export default function Home() {
         .filter((p) => p.shortage > 0)
         .sort((a, b) => b.leadTime - a.leadTime);
 
-      if (!priority.length) {
-        addAI("✅ No urgent orders required.");
+      if (priority.length === 0) {
+        addAI("✅ No urgent procurement actions required.");
       } else {
         addAI(
-          "🚨 Order priority:\n" +
+          "🚨 Order priority (longest lead first):\n" +
             priority
               .map(
                 (p, i) =>
