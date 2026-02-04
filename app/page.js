@@ -1,17 +1,45 @@
 "use client";
 
 import { useState } from "react";
+import * as XLSX from "xlsx";
 
 export default function Home() {
   const [messages, setMessages] = useState([
     {
       role: "ai",
       content:
-        "👋 Upload your BOM costing PDF and shortage Excel. Ask me about cost, shortages, lead times, or kit dates."
+        "👋 Upload your shortage Excel file. I can analyse shortages, stock, and lead times."
     }
   ]);
 
   const [input, setInput] = useState("");
+  const [shortageData, setShortageData] = useState([]);
+
+  function handleExcelUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = (evt) => {
+      const data = evt.target.result;
+      const workbook = XLSX.read(data, { type: "binary" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet);
+
+      setShortageData(json);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "ai",
+          content: `✅ Shortage file loaded (${json.length} rows). Ready for questions.`
+        }
+      ]);
+    };
+
+    reader.readAsBinaryString(file);
+  }
 
   function handleAsk() {
     if (!input.trim()) return;
@@ -19,33 +47,49 @@ export default function Home() {
     const userMessage = { role: "user", content: input };
     const aiMessage = {
       role: "ai",
-      content: generateFakeAIResponse(input)
+      content: answerFromShortageData(input)
     };
 
     setMessages([...messages, userMessage, aiMessage]);
     setInput("");
   }
 
-  function generateFakeAIResponse(question) {
-    const q = question.toLowerCase();
-
-    if (q.includes("cost")) {
-      return "💰 The total estimated cost will be calculated from the costing report once uploaded.";
+  function answerFromShortageData(question) {
+    if (shortageData.length === 0) {
+      return "⚠️ Please upload a shortage Excel file first.";
     }
 
+    const q = question.toLowerCase();
+
     if (q.includes("shortage")) {
-      return "📦 I will analyse the shortage report to identify missing components and quantities.";
+      const shortages = shortageData.filter(
+        (row) => Number(row.Shortage) > 0
+      );
+
+      if (shortages.length === 0) {
+        return "✅ No shortages found. All required parts are in stock.";
+      }
+
+      return `📦 ${shortages.length} items are in shortage. The most critical ones should be ordered first.`;
     }
 
     if (q.includes("lead")) {
-      return "⏱️ Lead times will be derived from the shortage file. The longest lead-time item will drive the build date.";
+      const withLeadTime = shortageData.filter(
+        (row) => Number(row["Lead Time"]) > 0
+      );
+
+      if (withLeadTime.length === 0) {
+        return "⚠️ No lead times defined in the shortage file.";
+      }
+
+      const longest = withLeadTime.reduce((a, b) =>
+        Number(a["Lead Time"]) > Number(b["Lead Time"]) ? a : b
+      );
+
+      return `⏱️ Longest lead-time item: ${longest.Description} (${longest["Lead Time"]} days).`;
     }
 
-    if (q.includes("kit")) {
-      return "📅 I’ll compare the longest lead-time item against your kit date and highlight any delivery risk.";
-    }
-
-    return "🤖 I understand your question. Once files are uploaded, I’ll give a precise answer based on BOM data.";
+    return "🤖 I can answer questions about shortages and lead times from the uploaded Excel.";
   }
 
   return (
@@ -56,33 +100,28 @@ export default function Home() {
 
         <div className="space-y-4">
           <div className="p-4 bg-gray-800 rounded-lg">
-            <p className="text-sm font-medium">Costing PDF</p>
-            <input type="file" accept=".pdf" className="mt-2 text-sm" />
-          </div>
-
-          <div className="p-4 bg-gray-800 rounded-lg">
             <p className="text-sm font-medium">Shortage Excel</p>
             <input
               type="file"
               accept=".xlsx,.xls"
               className="mt-2 text-sm"
+              onChange={handleExcelUpload}
             />
           </div>
         </div>
       </aside>
 
-      {/* Main Chat */}
+      {/* Chat */}
       <main className="flex-1 flex flex-col">
         <header className="p-6 border-b border-gray-800">
           <h1 className="text-2xl font-semibold">
-            AI Production & Costing Assistant
+            AI Production & Planning Assistant
           </h1>
           <p className="text-gray-400 text-sm">
-            Costing · Shortages · Lead times · Kit dates
+            Shortages · Lead times · Build risk
           </p>
         </header>
 
-        {/* Messages */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {messages.map((msg, idx) => (
             <div
@@ -104,7 +143,6 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Input */}
         <footer className="p-6 border-t border-gray-800">
           <div className="flex gap-4">
             <input
@@ -112,7 +150,7 @@ export default function Home() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAsk()}
               type="text"
-              placeholder="Ask a question..."
+              placeholder="Ask about shortages or lead times..."
               className="flex-1 bg-gray-800 rounded-xl px-4 py-3 text-sm focus:outline-none"
             />
             <button
