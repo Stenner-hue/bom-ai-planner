@@ -1,23 +1,32 @@
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import pdf from "pdf-parse";
 
 export async function POST(req) {
-  const data = await req.arrayBuffer();
-  const buffer = Buffer.from(data);
+  try {
+    const arrayBuffer = await req.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
 
-  const parsed = await pdf(buffer);
+    const parsed = await pdf(buffer);
+    const lines = parsed.text.split("\n");
 
-  const lines = parsed.text.split("\n");
+    let totalCost = 0;
 
-  let totalCost = 0;
-
-  lines.forEach((line) => {
-    const match = line.match(/£?\s?(\d+\.\d{2})$/);
-    if (match) {
-      totalCost += Number(match[1]);
+    for (const line of lines) {
+      const match = line.match(/£?\s?(\d+\.\d{2})$/);
+      if (match) {
+        totalCost += Number(match[1]);
+      }
     }
-  });
 
-  return Response.json({
-    totalCost: totalCost.toFixed(2)
-  });
+    return Response.json({
+      totalCost: totalCost.toFixed(2)
+    });
+  } catch (error) {
+    return Response.json(
+      { error: "Failed to parse costing PDF" },
+      { status: 500 }
+    );
+  }
 }
