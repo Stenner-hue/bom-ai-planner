@@ -1,14 +1,15 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import pdf from "pdf-parse";
-
 export async function POST(req) {
   try {
+    // Dynamic import — CRITICAL
+    const pdfParse = (await import("pdf-parse")).default;
+
     const arrayBuffer = await req.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    const parsed = await pdf(buffer);
+    const parsed = await pdfParse(buffer);
     const lines = parsed.text.split("\n");
 
     let totalCost = 0;
@@ -24,6 +25,8 @@ export async function POST(req) {
       totalCost: totalCost.toFixed(2)
     });
   } catch (error) {
+    console.error("PDF parse error:", error);
+
     return Response.json(
       { error: "Failed to parse costing PDF" },
       { status: 500 }
